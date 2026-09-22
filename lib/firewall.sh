@@ -51,21 +51,33 @@ fw_ip6tables_usable() {
 	[ "$_FW_IP6TABLES_USABLE" = "1" ]
 }
 
+# _fw_track FILE LINE: append LINE to FILE only if not already present.
+# fw_configure_from_state may call fw_allow_port/fw_apply_forward_and_nat
+# repeatedly (settings changes, repair) against rules that already exist
+# (the -C checks make the underlying add idempotent); without this the
+# tracking files would grow a duplicate line per re-apply.
+_fw_track() {
+	local file="$1" line="$2"
+	ensure_dir "$(dirname "$file")" 0700
+	touch "$file"
+	grep -qxF -- "$line" "$file" 2>/dev/null || echo "$line" >>"$file"
+}
+
 # --- port allow rules --------------------------------------------------
 fw_allow_port() {
 	local proto="$1" port="$2"
 	ensure_dir "$FW_STATE_DIR" 0700
 	if fw_ufw_active; then
 		ufw allow "${port}/${proto}" comment "openvpn-server-manager" >/dev/null
-		echo "${port}/${proto}" >>"$FW_UFW_RULES_FILE"
+		_fw_track "$FW_UFW_RULES_FILE" "${port}/${proto}"
 	else
 		iptables -C INPUT -p "$proto" --dport "$port" -m comment --comment "ovpn-mgr" -j ACCEPT 2>/dev/null || \
 			iptables -A INPUT -p "$proto" --dport "$port" -m comment --comment "ovpn-mgr" -j ACCEPT
-		echo "filter INPUT -p $proto --dport $port -m comment --comment ovpn-mgr -j ACCEPT" >>"$FW_IPT_RULES_FILE"
+		_fw_track "$FW_IPT_RULES_FILE" "filter INPUT -p $proto --dport $port -m comment --comment ovpn-mgr -j ACCEPT"
 		if fw_ip6tables_usable; then
 			if ip6tables -C INPUT -p "$proto" --dport "$port" -m comment --comment "ovpn-mgr" -j ACCEPT 2>/dev/null || \
 				ip6tables -A INPUT -p "$proto" --dport "$port" -m comment --comment "ovpn-mgr" -j ACCEPT 2>/dev/null; then
-				echo "filter6 INPUT -p $proto --dport $port -m comment --comment ovpn-mgr -j ACCEPT" >>"$FW_IPT_RULES_FILE"
+				_fw_track "$FW_IPT_RULES_FILE" "filter6 INPUT -p $proto --dport $port -m comment --comment ovpn-mgr -j ACCEPT"
 			else
 				log_warn "ip6tables rule for port ${port}/${proto} could not be added; continuing (IPv6 firewalling is best-effort)."
 			fi
@@ -89,11 +101,11 @@ fw_apply_forward_and_nat() {
 		# Forwarding between the VPN and the public interface.
 		iptables -C FORWARD -i "${FW_TUN_PREFIX}+" -o "$pubif" -m comment --comment "ovpn-mgr" -j ACCEPT 2>/dev/null || \
 			iptables -A FORWARD -i "${FW_TUN_PREFIX}+" -o "$pubif" -m comment --comment "ovpn-mgr" -j ACCEPT
-		echo "filter FORWARD -i ${FW_TUN_PREFIX}+ -o $pubif -m comment --comment ovpn-mgr -j ACCEPT" >>"$FW_IPT_RULES_FILE"
+		_fw_track "$FW_IPT_RULES_FILE" "filter FORWARD -i ${FW_TUN_PREFIX}+ -o $pubif -m comment --comment ovpn-mgr -j ACCEPT"
 
 		iptables -C FORWARD -i "$pubif" -o "${FW_TUN_PREFIX}+" -m state --state RELATED,ESTABLISHED -m comment --comment "ovpn-mgr" -j ACCEPT 2>/dev/null || \
 			iptables -A FORWARD -i "$pubif" -o "${FW_TUN_PREFIX}+" -m state --state RELATED,ESTABLISHED -m comment --comment "ovpn-mgr" -j ACCEPT
-		echo "filter FORWARD -i $pubif -o ${FW_TUN_PREFIX}+ -m state --state RELATED,ESTABLISHED -m comment --comment ovpn-mgr -j ACCEPT" >>"$FW_IPT_RULES_FILE"
+		_fw_track "$FW_IPT_RULES_FILE" "filter FORWARD -i $pubif -o ${FW_TUN_PREFIX}+ -m state --state RELATED,ESTABLISHED -m comment --comment ovpn-mgr -j ACCEPT"
 
 		local s
 		for s in "${subnets[@]}"; do
@@ -102,14 +114,14 @@ fw_apply_forward_and_nat() {
 				fw_ip6tables_usable || continue
 				if ip6tables -t nat -C POSTROUTING -s "$s" -o "$pubif" -m comment --comment "ovpn-mgr" -j MASQUERADE 2>/dev/null || \
 					ip6tables -t nat -A POSTROUTING -s "$s" -o "$pubif" -m comment --comment "ovpn-mgr" -j MASQUERADE 2>/dev/null; then
-					echo "nat6 POSTROUTING -s $s -o $pubif -m comment --comment ovpn-mgr -j MASQUERADE" >>"$FW_IPT_RULES_FILE"
+					_fw_track "$FW_IPT_RULES_FILE" "nat6 POSTROUTING -s $s -o $pubif -m comment --comment ovpn-mgr -j MASQUERADE"
 				else
 					log_warn "ip6tables NAT rule for ${s} could not be added; continuing (IPv6 firewalling is best-effort)."
 				fi
 			else
 				iptables -t nat -C POSTROUTING -s "$s" -o "$pubif" -m comment --comment "ovpn-mgr" -j MASQUERADE 2>/dev/null || \
 					iptables -t nat -A POSTROUTING -s "$s" -o "$pubif" -m comment --comment "ovpn-mgr" -j MASQUERADE
-				echo "nat POSTROUTING -s $s -o $pubif -m comment --comment ovpn-mgr -j MASQUERADE" >>"$FW_IPT_RULES_FILE"
+				_fw_track "$FW_IPT_RULES_FILE" "nat POSTROUTING -s $s -o $pubif -m comment --comment ovpn-mgr -j MASQUERADE"
 			fi
 		done
 	fi
@@ -201,6 +213,31 @@ fw_remove_all() {
 		rm -f "$FW_IPT_RULES_FILE"
 	fi
 	rm -rf "$FW_STATE_DIR"
+}
+
+# fw_configure_from_state: (re)derive listener ports and per-listener
+# subnets from the LISTENERS state and (re)apply port-allow + forward/NAT
+# rules for all of them. Idempotent — safe to call on first install, after
+# `ovpn settings` changes, and from `ovpn repair` to restore rules that
+# were deleted out from under the manager (including the UFW case, where
+# ordinary reboot-time persistence relies on UFW's own saved rule files and
+# so doesn't help if a rule was manually removed rather than the system
+# rebooted).
+fw_configure_from_state() {
+	local pubif; pubif="$(fw_public_iface)"
+	[ -n "$pubif" ] || { log_warn "Could not determine public interface; skipping firewall configuration."; return 1; }
+
+	local subnets=() idx=0 entry proto port family
+	IFS=',' read -ra _fw_entries <<<"$(state_get LISTENERS "")"
+	for entry in "${_fw_entries[@]}"; do
+		[ -n "$entry" ] || continue
+		IFS='|' read -r _ proto port _ family <<<"$entry"
+		fw_allow_port "$proto" "$port"
+		subnets+=("$(srvcfg_subnet_for_index "$idx" | awk '{print $1"/24"}')")
+		[ "$family" = "6" ] && subnets+=("$(srvcfg_subnet6_for_index "$idx")")
+		idx=$((idx + 1))
+	done
+	fw_apply_forward_and_nat "$pubif" "${subnets[@]}"
 }
 
 fw_summary() {

@@ -206,23 +206,12 @@ _family="$(state_get IP_FAMILY ipv4)"
 net_enable_forwarding "$([ "$_family" = "dual" ] && echo both || echo v4)"
 
 log_step "Configuring firewall"
-_pubif="$(fw_public_iface)"
-_subnets=()
-_idx=0
-IFS=',' read -ra _entries <<<"$(state_get LISTENERS "")"
-for _entry in "${_entries[@]}"; do
-	[ -n "$_entry" ] || continue
-	IFS='|' read -r _name _proto _port _dev _fam <<<"$_entry"
-	fw_allow_port "$_proto" "$_port"
-	_subnets+=("$(srvcfg_subnet_for_index "$_idx" | awk '{print $1"/24"}')")
-	[ "$_fam" = "6" ] && _subnets+=("$(srvcfg_subnet6_for_index "$_idx")")
-	_idx=$((_idx + 1))
-done
-fw_apply_forward_and_nat "$_pubif" "${_subnets[@]}"
+fw_configure_from_state
 log_ok "Firewall backend in use: $(fw_summary)"
 
 log_step "Starting OpenVPN listeners"
 systemctl daemon-reload
+IFS=',' read -ra _entries <<<"$(state_get LISTENERS "")"
 for _entry in "${_entries[@]}"; do
 	[ -n "$_entry" ] || continue
 	IFS='|' read -r _name _proto _port _dev _fam <<<"$_entry"

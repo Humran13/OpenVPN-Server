@@ -45,9 +45,9 @@ repair_run() {
 		log_warn "No listener state found; nothing to regenerate. Run 'ovpn settings' to configure listeners."
 	fi
 
-	log_info "Re-applying tracked firewall rules"
-	local pubif; pubif="$(fw_public_iface)"
-	if [ -n "$pubif" ] && [ -n "$(state_get LISTENERS "")" ]; then
+	log_info "Re-applying firewall rules"
+	if [ -n "$(state_get LISTENERS "")" ]; then
+		fw_configure_from_state
 		fw_apply_persisted
 	fi
 

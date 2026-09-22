@@ -123,7 +123,10 @@ diag_run() {
 
 	echo "${C_BOLD}Recent OpenVPN service errors${C_RESET}"
 	local errs
-	errs="$(journalctl -u 'openvpn-server-manager@*' --since '-1 hour' -p err --no-pager 2>/dev/null | wc -l | tr -d ' ')"
+	# journalctl prints a literal "-- No entries --" line (to stdout) when
+	# there are no matches rather than producing empty output, so filter it
+	# out before counting — otherwise every clean system falsely reports 1.
+	errs="$(journalctl -u 'openvpn-server-manager@*' --since '-1 hour' -p err --no-pager 2>/dev/null | grep -vc -- '-- No entries --')"
 	[ "${errs:-0}" -eq 0 ] && _diag_result PASS "No errors in the last hour" || _diag_result WARN "${errs} error line(s) in the last hour — see 'ovpn logs'"
 
 	echo

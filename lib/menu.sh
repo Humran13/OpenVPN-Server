@@ -64,7 +64,7 @@ wizard_run() {
 		"Custom / advanced (choose your own listeners)"
 	local mode="$REPLY_CHOICE"
 
-	local listeners=() idx=0
+	local listeners=()
 	case "$mode" in
 		1)
 			local port; port="$(menu_ask_validated "UDP port" "${DEFAULT_UDP_PORT}" valid_port)"
@@ -228,17 +228,7 @@ menu_settings() {
 		confirm "Reconfiguring will regenerate server configs and restart all listeners. Continue?" || return 0
 		wizard_run
 		srvcfg_generate_all
-		local pubif; pubif="$(fw_public_iface)"
-		local subnets=() idx=0 entry proto port
-		IFS=',' read -ra _entries <<<"$(state_get LISTENERS "")"
-		for entry in "${_entries[@]}"; do
-			[ -n "$entry" ] || continue
-			IFS='|' read -r _ proto port _ _ <<<"$entry"
-			fw_allow_port "$proto" "$port"
-			subnets+=("$(srvcfg_subnet_for_index "$idx" | awk '{print $1"/24"}')")
-			idx=$((idx + 1))
-		done
-		fw_apply_forward_and_nat "$pubif" "${subnets[@]}"
+		fw_configure_from_state
 		systemctl daemon-reload
 		systemd_restart_all
 		log_ok "Settings applied."
