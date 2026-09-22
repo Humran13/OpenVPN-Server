@@ -1,0 +1,8 @@
+NAME="Ubuntu"
+VERSION="16.04.7 LTS (Xenial Xerus)"
+ID=ubuntu
+ID_LIKE=debian
+PRETTY_NAME="Ubuntu 16.04.7 LTS"
+VERSION_ID="16.04"
+VERSION_CODENAME=xenial
+UBUNTU_CODENAME=xenial

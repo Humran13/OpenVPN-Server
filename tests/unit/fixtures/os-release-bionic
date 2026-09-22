@@ -1,0 +1,8 @@
+NAME="Ubuntu"
+VERSION="18.04.6 LTS (Bionic Beaver)"
+ID=ubuntu
+ID_LIKE=debian
+PRETTY_NAME="Ubuntu 18.04.6 LTS"
+VERSION_ID="18.04"
+VERSION_CODENAME=bionic
+UBUNTU_CODENAME=bionic

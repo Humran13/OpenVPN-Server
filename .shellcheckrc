@@ -1,0 +1,12 @@
+# ShellCheck project configuration.
+#
+# SC2317 ("unreachable command") fires on every lib/*.sh include-guard early
+# `return`, because ShellCheck analyzes each file standalone and can't see
+# that these files are sourced, not executed. It is a structural false
+# positive across this whole codebase.
+#
+# SC2015 (A && B || C) fires on our PASS/WARN/FAIL diagnostic lines, where B
+# (_diag_result ...) always returns 0, so the A&&B||C pattern is safe and
+# intentional there.
+disable=SC2317
+disable=SC2015

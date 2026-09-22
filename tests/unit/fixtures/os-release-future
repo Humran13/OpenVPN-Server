@@ -1,0 +1,8 @@
+NAME="Ubuntu"
+VERSION="28.04 LTS (Some Future Release)"
+ID=ubuntu
+ID_LIKE=debian
+PRETTY_NAME="Ubuntu 28.04 LTS"
+VERSION_ID="28.04"
+VERSION_CODENAME=futurefossa
+UBUNTU_CODENAME=futurefossa

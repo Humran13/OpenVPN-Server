@@ -1,0 +1,10 @@
+# Force LF line endings for everything text-based, regardless of any
+# contributor's local core.autocrlf setting. Shell scripts with CRLF
+# endings fail outright on Linux (bad interpreter / bash -n errors), so
+# this is not optional for this repo.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.bats text eol=lf
+install.sh text eol=lf
+bin/ovpn text eol=lf

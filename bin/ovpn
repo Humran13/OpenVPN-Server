@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# ovpn — OpenVPN Server Manager CLI/TUI entry point.
+set -o pipefail
+
+_SELF="${BASH_SOURCE[0]}"
+while [ -L "$_SELF" ]; do
+	_target="$(readlink "$_SELF")"
+	case "$_target" in
+		/*) _SELF="$_target" ;;
+		*) _SELF="$(dirname "$_SELF")/$_target" ;;
+	esac
+done
+_BIN_DIR="$(cd "$(dirname "$_SELF")" >/dev/null 2>&1 && pwd)"
+_LIB_DIR="$(cd "${_BIN_DIR}/../lib" >/dev/null 2>&1 && pwd)"
+
+for _f in common os validate state network firewall systemd openvpn_install pki \
+	server_config client_config menu status diagnostics logs backup update \
+	repair uninstall version; do
+	# shellcheck source=/dev/null
+	. "${_LIB_DIR}/${_f}.sh"
+done
+unset _f
+
+os_detect >/dev/null 2>&1 || true
+
+usage() {
+	cat <<EOF
+OpenVPN Server Manager v${MANAGER_VERSION}
+
+Usage: sudo ovpn [command] [args]
+
+Commands:
+  (none)                    Open the interactive menu
+  status                    Show server status
+  diagnostics               Run health checks (PASS/WARN/FAIL)
+  logs [name] [-f]          Show OpenVPN logs (optionally follow)
+  restart                   Restart all configured listeners
+  settings                  Reconfigure connection/server settings
+  client add NAME           Create a new client and export its profile
+  client list                List all clients and their status
+  client show NAME           Show details for one client
+  client revoke NAME         Revoke a client's certificate
+  client renew NAME          Renew/reissue a client's certificate
+  client export NAME [PATH]  (Re-)export a client's .ovpn profile
+  backup [PATH]              Create a backup archive
+  restore PATH                Restore from a backup archive
+  update [--manager|--engine] Update the manager or the OpenVPN engine
+  repair                      Reconstruct missing project-owned pieces
+  uninstall [--full] [-y]     Remove the manager (keeps PKI unless --full)
+  version                     Show version information
+  -h, --help                   Show this help
+
+Exit codes: 0 success, 1 failure/warning, 2 diagnostics found failures.
+EOF
+}
+
+ovpn_cmd_client_add() {
+	local name="$1"
+	[ -n "$name" ] || die "Usage: ovpn client add NAME"
+	valid_client_name "$name" || die "Invalid client name '${name}'. Use letters, numbers, '.', '_' or '-' only (max 64 chars)."
+	pki_install_easyrsa
+	pki_build_client "$name"
+	ensure_dir "$CLIENT_EXPORT_DIR" 0700
+	local out; out="$(ccfg_default_path "$name")"
+	ccfg_export "$name" "$out"
+	echo
+	log_ok "Client '${name}' created. Profile: ${out}"
+}
+
+ovpn_cmd_client_show() {
+	local name="$1"
+	[ -n "$name" ] || die "Usage: ovpn client show NAME"
+	local status; status="$(pki_client_status "$name")" || die "No such client: '${name}'"
+	echo "Name:    ${name}"
+	echo "Status:  ${status}"
+	echo "Expires: $(pki_client_expiry "$name" 2>/dev/null || echo unknown)"
+	[ -f "${VAR_DIR}/clients/${name}.created" ] && echo "Created: $(cat "${VAR_DIR}/clients/${name}.created")"
+	[ -f "${VAR_DIR}/clients/${name}.revoked" ] && echo "Revoked: $(cat "${VAR_DIR}/clients/${name}.revoked")"
+	local path; path="$(ccfg_default_path "$name")"
+	if [ -f "$path" ]; then
+		echo "Profile: ${path}"
+	fi
+	return 0
+}
+
+ovpn_cmd_client_export() {
+	local name="$1" out="${2:-}"
+	[ -n "$name" ] || die "Usage: ovpn client export NAME [PATH]"
+	[ -n "$out" ] || out="$(ccfg_default_path "$name")"
+	ccfg_export "$name" "$out"
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+	--internal-fw-persist)
+		fw_apply_persisted
+		;;
+	status)
+		require_root
+		status_show
+		;;
+	diagnostics|diag)
+		require_root
+		diag_run
+		;;
+	logs)
+		require_root
+		follow=0; name=""
+		for a in "$@"; do
+			case "$a" in -f|--follow) follow=1 ;; *) name="$a" ;; esac
+		done
+		logs_show "$name" "$follow"
+		;;
+	restart)
+		require_root
+		systemctl daemon-reload
+		systemd_restart_all
+		log_ok "Restart requested for all listeners."
+		;;
+	settings)
+		require_root
+		menu_settings
+		;;
+	client)
+		require_root
+		sub="${1:-}"; [ $# -gt 0 ] && shift
+		case "$sub" in
+			add) ovpn_cmd_client_add "${1:-}" ;;
+			list) pki_list_clients ;;
+			show) ovpn_cmd_client_show "${1:-}" ;;
+			revoke)
+				n=""
+				for a in "$@"; do
+					case "$a" in
+						-y|--yes) export OVPN_ASSUME_YES=1 ;;
+						*) n="$a" ;;
+					esac
+				done
+				[ -n "$n" ] || die "Usage: ovpn client revoke NAME [-y]"
+				confirm "Revoke '${n}'?" && pki_revoke_client "$n" ;;
+			renew) n="${1:-}"; [ -n "$n" ] || die "Usage: ovpn client renew NAME"; pki_renew_client "$n" ;;
+			export) ovpn_cmd_client_export "${1:-}" "${2:-}" ;;
+			*) log_error "Usage: ovpn client <add|list|show|revoke|renew|export> NAME"; exit 1 ;;
+		esac
+		;;
+	backup)
+		require_root
+		backup_create "${1:-}"
+		;;
+	restore)
+		require_root
+		[ -n "${1:-}" ] || die "Usage: ovpn restore PATH"
+		restore_from "$1"
+		;;
+	update)
+		require_root
+		case "${1:-}" in
+			--engine) update_engine ;;
+			--manager|"") update_manager ;;
+			*) log_error "Usage: ovpn update [--manager|--engine]"; exit 1 ;;
+		esac
+		;;
+	repair)
+		require_root
+		repair_run
+		;;
+	uninstall)
+		require_root
+		mode="keep-data"
+		for a in "$@"; do
+			case "$a" in
+				--full) mode="full" ;;
+				-y|--yes) export OVPN_ASSUME_YES=1 ;;
+			esac
+		done
+		if [ "$mode" = "full" ]; then
+			confirm "This PERMANENTLY deletes the CA, all client certificates and configuration. Continue?" || exit 1
+		else
+			confirm "Remove the manager and services (PKI/config will be preserved)?" || exit 1
+		fi
+		uninstall_run "$mode"
+		;;
+	version|--version|-v)
+		version_show
+		;;
+	-h|--help|help)
+		usage
+		;;
+	"")
+		require_root
+		have_tty || die "No interactive terminal available. Use a subcommand instead (see: ovpn --help)."
+		menu_main
+		;;
+	*)
+		log_error "Unknown command: ${cmd}"
+		usage
+		exit 1
+		;;
+esac

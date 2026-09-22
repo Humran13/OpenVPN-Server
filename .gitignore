@@ -1,0 +1,16 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Local scratch / test artifacts
+/tests/integration/.scratch/
+*.log
+
+# Never commit real PKI or generated secrets, even accidentally
+*.key
+*.p12
+*.pem
+!tests/**/*.pem
+pki/

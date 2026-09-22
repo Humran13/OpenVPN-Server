@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ShellCheck
+        run: |
+          shellcheck -S warning -x install.sh bin/ovpn lib/*.sh
+
+  shfmt:
+    name: shfmt (formatting)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shfmt
+        run: |
+          sudo snap install shfmt || \
+          (curl -fsSL -o /tmp/shfmt https://github.com/mvdan/sh/releases/latest/download/shfmt_linux_amd64 && \
+           chmod +x /tmp/shfmt && sudo mv /tmp/shfmt /usr/local/bin/shfmt)
+      - name: Check formatting (tabs, no diff required to pass — informational)
+        run: |
+          shfmt -d -i 0 -ci install.sh bin/ovpn lib/*.sh || true
+
+  syntax:
+    name: bash -n syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check every script
+        run: |
+          set -e
+          for f in install.sh bin/ovpn lib/*.sh tests/integration/run.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+  unit-tests:
+    name: Bats unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit tests in bats/bats container
+        run: |
+          docker run --rm -v "${PWD}:/code" -w /code bats/bats:latest tests/unit/
+
+  os-matrix-static:
+    name: OS detection matrix (${{ matrix.codename }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        codename: [bionic, focal, jammy, noble, resolute]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify os.sh correctly identifies ${{ matrix.codename }}
+        run: |
+          set -e
+          . lib/os.sh
+          os_detect "tests/unit/fixtures/os-release-${{ matrix.codename }}"
+          echo "Detected: $OS_ID $OS_VERSION_ID ($OS_CODENAME)"
+          [ "$OS_ID" = "ubuntu" ]
+
+  integration-smoke:
+    name: Real end-to-end UDP tunnel (Ubuntu 22.04)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure /dev/net/tun is available
+        run: |
+          sudo mkdir -p /dev/net
+          sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
+          sudo chmod 666 /dev/net/tun
+          test -c /dev/net/tun
+      - name: Run real UDP install + connect + ping integration test
+        run: |
+          BASE_IMAGE=ubuntu:22.04 SCENARIO=udp bash tests/integration/run.sh
+        timeout-minutes: 15
+
+  # NOTE: the full scenario x OS-version matrix (tcp/dual/revoke/idempotent/
+  # backup-restore/uninstall-reinstall/multi-client, across bionic through
+  # resolute, both the apt-repo and source-build engine install paths) is
+  # exercised manually before each release rather than on every CI run, to
+  # keep pull-request CI fast and inexpensive. See CHANGELOG.md / the
+  # release notes for the exact matrix that was run and its results.
