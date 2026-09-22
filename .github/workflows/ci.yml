@@ -13,9 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run ShellCheck
+      - name: Run ShellCheck (pinned version, matches local dev)
         run: |
-          shellcheck -S warning -x install.sh bin/ovpn lib/*.sh
+          docker run --rm -v "${PWD}:/mnt" -w /mnt koalaman/shellcheck:stable \
+            -S warning -x install.sh bin/ovpn lib/*.sh
 
   shfmt:
     name: shfmt (formatting)
