@@ -68,10 +68,11 @@ pki_init() {
 	ensure_dir "$(dirname "$PKI_DIR")" 0755
 	_easyrsa "$ca_cn" init-pki >/dev/null || die "easyrsa init-pki failed"
 	_easyrsa "$ca_cn" build-ca nopass >/dev/null || die "easyrsa build-ca failed"
-	# Some openssl versions warn (harmlessly) on the first `openssl ca`
-	# invocation if index.txt.attr doesn't exist yet; easy-rsa doesn't
-	# pre-create it, so we do, to keep first-issuance output clean.
-	[ -f "${PKI_DIR}/index.txt.attr" ] || : >"${PKI_DIR}/index.txt.attr"
+	# Some openssl versions warn (harmlessly, "no value ... unique_subject")
+	# on the first `openssl ca` invocation if index.txt.attr doesn't exist
+	# yet; easy-rsa doesn't pre-create it, so we do with the same content
+	# openssl itself would default to, to keep first-issuance output clean.
+	[ -f "${PKI_DIR}/index.txt.attr" ] || echo "unique_subject = yes" >"${PKI_DIR}/index.txt.attr"
 	chmod 0700 "$PKI_DIR"
 	chmod 0700 "${PKI_DIR}/private"
 	log_ok "Certificate authority created."
