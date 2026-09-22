@@ -88,9 +88,21 @@ start_container() {
 }
 
 wait_systemd() {
-	local name="$1" i=0
-	while [ "$i" -lt 30 ]; do
-		if docker exec "$name" systemctl is-system-running 2>/dev/null | grep -qE 'running|degraded'; then
+	local name="$1" i=0 state
+	# 45s is plenty once this is checking the right thing (see below); a
+	# freshly-pulled image typically reaches degraded/running within a
+	# couple of seconds.
+	while [ "$i" -lt 45 ]; do
+		# NOTE: must NOT be `docker exec ... | grep ...`. Under this
+		# script's `set -o pipefail`, `systemctl is-system-running` exits
+		# 1 for the "degraded" state — a state we want to ACCEPT here —
+		# and pipefail then makes the whole pipeline report that 1 even
+		# when grep matches, so the `if` sees a false condition forever
+		# and this loops until timeout no matter what. Capturing the
+		# output first and grepping it as a separate, unrelated pipeline
+		# avoids that trap.
+		state="$(docker exec "$name" systemctl is-system-running 2>/dev/null || true)"
+		if printf '%s' "$state" | grep -qE 'running|degraded'; then
 			return 0
 		fi
 		sleep 1; i=$((i + 1))

@@ -4,6 +4,9 @@ Thumbs.db
 *.swp
 *~
 
+# Claude Code session-local state (not project content)
+.claude/
+
 # Local scratch / test artifacts
 /tests/integration/.scratch/
 *.log
