@@ -57,6 +57,53 @@ net_ipv6_usable() {
 	curl -6 -fsS --max-time 3 -o /dev/null "https://ifconfig.co" 2>/dev/null
 }
 
+# --- listener port occupancy ------------------------------------------------
+# net_port_status proto port — checks whether something is already
+# listening on TCP or UDP port $2 (checked independently per protocol, so a
+# TCP user of a port never blocks the same numeric UDP port or vice versa).
+#
+# Prints a short human-readable description of the occupant on stdout (empty
+# when free) and returns:
+#   0 — free
+#   1 — held by one of OUR OWN listener services (openvpn-server-manager@*);
+#       safe to reuse, it will simply be stopped/restarted as part of
+#       applying the new configuration.
+#   2 — held by an unrelated process (genuine conflict).
+# If `ss` is unavailable, this is skipped (falsely reports free) rather than
+# blocking the installer over a missing tool.
+net_port_status() {
+	local proto="$1" port="$2" flag line pid pname unit
+	case "$proto" in
+		tcp) flag="-ltnp" ;;
+		udp) flag="-lunp" ;;
+		*) return 0 ;;
+	esac
+	command -v ss >/dev/null 2>&1 || return 0
+
+	line="$(ss "$flag" 2>/dev/null | awk -v port="$port" '
+		NR>1 {
+			for (i=1;i<=NF;i++) {
+				if ($i ~ (":" port "$")) { print; next }
+			}
+		}' | head -n1)"
+	[ -n "$line" ] || return 0
+
+	pid="$(printf '%s' "$line" | grep -oE 'pid=[0-9]+' | head -n1 | cut -d= -f2)"
+	pname="$(printf '%s' "$line" | grep -oE '\(\("[^"]+"' | head -n1 | tr -d '(\"')"
+
+	local proc_dir="${OVPN_PROC_DIR:-/proc}"
+	if [ -n "$pid" ] && [ -r "${proc_dir}/${pid}/cgroup" ]; then
+		unit="$(grep -oE "${SVC_TEMPLATE:-openvpn-server-manager@}[^/[:space:]]*\\.service" "${proc_dir}/${pid}/cgroup" 2>/dev/null | head -n1)"
+		if [ -n "$unit" ]; then
+			printf 'our own listener (%s, pid %s)\n' "$unit" "$pid"
+			return 1
+		fi
+	fi
+
+	printf '%s (pid %s)\n' "${pname:-unknown process}" "${pid:-?}"
+	return 2
+}
+
 # --- IP forwarding (tracked) ------------------------------------------------
 _SYSCTL_TRACK_FILE="${ETC_DIR}/sysctl.orig"
 _SYSCTL_DROPIN="/etc/sysctl.d/99-openvpn-server-manager.conf"

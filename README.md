@@ -28,7 +28,7 @@ sudo bash install.sh
 
 ## What you get
 
-- **OpenVPN Community Edition 2.7.7**, installed from the official OpenVPN
+- **OpenVPN Community Edition 2.7.8**, installed from the official OpenVPN
   apt repository where available, or built from verified upstream source
   (checksum + GPG signature, pinned in [`config/upstream.conf`](config/upstream.conf))
   where it isn't yet.

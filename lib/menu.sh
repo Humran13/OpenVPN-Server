@@ -49,6 +49,27 @@ menu_ask_validated() {
 	done
 }
 
+# menu_ask_port "Prompt" default proto -> a numerically valid port that is
+# either free or already one of our own listeners (safe to reuse/restart).
+# Loops and re-prompts when the chosen port is held by an unrelated process.
+menu_ask_port() {
+	local prompt="$1" default="$2" proto="$3" port occupant rc
+	while :; do
+		port="$(menu_ask_validated "$prompt" "$default" valid_port)"
+		rc=0
+		occupant="$(net_port_status "$proto" "$port")" || rc=$?
+		case "$rc" in
+			2)
+				echo "Port ${proto}/${port} is already in use by ${occupant}. This installer will not touch unrelated processes — choose a different port, or free it first and try again." >&2
+				;;
+			*)
+				printf '%s\n' "$port"
+				return 0
+				;;
+		esac
+	done
+}
+
 # --- install / reconfigure wizard ------------------------------------------
 # Populates the LISTENERS, ROUTING_MODE, SPLIT_NETWORKS, IP_FAMILY,
 # DNS_MODE, DNS_CUSTOM and PUBLIC_HOST state keys.
@@ -67,17 +88,17 @@ wizard_run() {
 	local listeners=()
 	case "$mode" in
 		1)
-			local port; port="$(menu_ask_validated "UDP port" "${DEFAULT_UDP_PORT}" valid_port)"
+			local port; port="$(menu_ask_port "UDP port" "${DEFAULT_UDP_PORT}" udp)"
 			listeners+=("udp${port}|udp|${port}|ovpn0")
 			;;
 		2)
-			local port; port="$(menu_ask_validated "TCP port" "${DEFAULT_TCP_PORT}" valid_port)"
+			local port; port="$(menu_ask_port "TCP port" "${DEFAULT_TCP_PORT}" tcp)"
 			listeners+=("tcp${port}|tcp|${port}|ovpn0")
 			;;
 		3)
 			local uport tport
-			uport="$(menu_ask_validated "UDP port" "${DEFAULT_UDP_PORT}" valid_port)"
-			tport="$(menu_ask_validated "TCP port" "${DEFAULT_TCP_PORT}" valid_port)"
+			uport="$(menu_ask_port "UDP port" "${DEFAULT_UDP_PORT}" udp)"
+			tport="$(menu_ask_port "TCP port" "${DEFAULT_TCP_PORT}" tcp)"
 			listeners+=("udp${uport}|udp|${uport}|ovpn0")
 			listeners+=("tcp${tport}|tcp|${tport}|ovpn1")
 			;;
@@ -87,7 +108,7 @@ wizard_run() {
 				local proto port
 				menu_choice "Listener #$((n + 1)) protocol" "UDP" "TCP"
 				[ "$REPLY_CHOICE" = "1" ] && proto=udp || proto=tcp
-				port="$(menu_ask_validated "Port for this listener" "$([ "$proto" = udp ] && echo "$DEFAULT_UDP_PORT" || echo "$DEFAULT_TCP_PORT")" valid_port)"
+				port="$(menu_ask_port "Port for this listener" "$([ "$proto" = udp ] && echo "$DEFAULT_UDP_PORT" || echo "$DEFAULT_TCP_PORT")" "$proto")"
 				local dup=0 existing
 				for existing in "${listeners[@]}"; do
 					IFS='|' read -r _ ep epo _ <<<"$existing"
@@ -226,10 +247,20 @@ menu_settings() {
 	menu_choice "Settings" "Reconfigure (runs the setup wizard again)" "Back"
 	if [ "$REPLY_CHOICE" = "1" ]; then
 		confirm "Reconfiguring will regenerate server configs and restart all listeners. Continue?" || return 0
+		local old_listeners; old_listeners="$(state_get LISTENERS "")"
 		wizard_run
+		local new_listeners; new_listeners="$(state_get LISTENERS "")"
+		systemd_sync_listeners "$old_listeners" "$new_listeners"
 		srvcfg_generate_all
 		fw_configure_from_state
 		systemctl daemon-reload
+		local entry name
+		IFS=',' read -ra _entries <<<"$new_listeners"
+		for entry in "${_entries[@]}"; do
+			[ -n "$entry" ] || continue
+			IFS='|' read -r name _ _ _ _ <<<"$entry"
+			systemd_enable_instance "$name"
+		done
 		systemd_restart_all
 		log_ok "Settings applied."
 	fi

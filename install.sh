@@ -180,6 +180,15 @@ elif [ "${OVPN_NONINTERACTIVE:-0}" = "1" ]; then
 		dual) _listeners="udp${OVPN_UDP_PORT:-$DEFAULT_UDP_PORT}|udp|${OVPN_UDP_PORT:-$DEFAULT_UDP_PORT}|ovpn0|${_famsuf},tcp${OVPN_TCP_PORT:-$DEFAULT_TCP_PORT}|tcp|${OVPN_TCP_PORT:-$DEFAULT_TCP_PORT}|ovpn1|${_famsuf}" ;;
 		*) die "Unknown OVPN_MODE '${_mode}' (expected udp|tcp|dual)" ;;
 	esac
+	_entry_check=""
+	IFS=',' read -ra _entries_check <<<"$_listeners"
+	for _entry_check in "${_entries_check[@]}"; do
+		[ -n "$_entry_check" ] || continue
+		IFS='|' read -r _ _proto_check _port_check _ _ <<<"$_entry_check"
+		_occupant_rc=0
+		_occupant="$(net_port_status "$_proto_check" "$_port_check")" || _occupant_rc=$?
+		[ "$_occupant_rc" -eq 2 ] && die "Port ${_proto_check}/${_port_check} is already in use by ${_occupant}. Set OVPN_UDP_PORT/OVPN_TCP_PORT to a free port and retry (non-interactive installs cannot prompt for one)."
+	done
 	state_set LISTENERS "$_listeners"
 	state_set IP_FAMILY "${OVPN_IP_FAMILY:-ipv4}"
 	state_set ROUTING_MODE "${OVPN_ROUTING:-full}"

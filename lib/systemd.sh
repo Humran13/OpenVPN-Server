@@ -27,7 +27,7 @@ ConditionPathExists=${confdir}/%i.conf
 Type=notify
 PrivateTmp=true
 ExecStart=${openvpn_bin} --config ${confdir}/%i.conf
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_DAC_OVERRIDE CAP_CHOWN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_DAC_OVERRIDE CAP_CHOWN CAP_NET_BIND_SERVICE
 LimitNPROC=100
 DeviceAllow=/dev/net/tun
 ProtectSystem=full
@@ -83,5 +83,29 @@ systemd_restart_all() {
 	local inst
 	for inst in $(systemd_list_instances); do
 		systemctl restart "${SVC_TEMPLATE}${inst}.service" || log_warn "Failed to restart listener '${inst}'"
+	done
+}
+
+# systemd_sync_listeners old_listeners_csv new_listeners_csv — stops,
+# disables and removes the generated config of every listener instance
+# present in the OLD state's LISTENERS encoding but absent from the NEW
+# one, so a settings change never leaves a stale, still-enabled listener
+# behind. Listeners present in both (even on a different port) are left
+# alone here; srvcfg_generate_all/systemd_restart_all handle picking up
+# their new config.
+systemd_sync_listeners() {
+	local old_csv="$1" new_csv="$2" old_names new_names name keep other
+	old_names="$(printf '%s' "$old_csv" | tr ',' '\n' | awk -F'|' 'NF{print $1}')"
+	new_names="$(printf '%s' "$new_csv" | tr ',' '\n' | awk -F'|' 'NF{print $1}')"
+	for name in $old_names; do
+		keep=0
+		for other in $new_names; do
+			[ "$other" = "$name" ] && { keep=1; break; }
+		done
+		if [ "$keep" -eq 0 ]; then
+			log_info "Removing stale listener '${name}' (no longer in configuration)"
+			systemd_disable_instance "$name"
+			rm -f "${SRV_CONF_DIR}/${name}.conf"
+		fi
 	done
 }
