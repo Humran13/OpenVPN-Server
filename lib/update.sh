@@ -49,6 +49,10 @@ update_manager() {
 	cp -a "$OPT_DIR" "$backup"
 	if cp -a "$src/." "$OPT_DIR/" && chmod +x "${OPT_DIR}/bin/ovpn"; then
 		state_set MANAGER_VERSION "$latest"
+		log_info "Regenerating systemd unit templates from the updated manager"
+		systemd_install_template "$(ovpn_engine_resolve_bin)" "$SRV_CONF_DIR"
+		systemctl daemon-reload
+		systemd_restart_all
 		log_ok "Manager updated to v${latest}. Backup of previous version kept at ${backup}"
 		rm -rf "$tmp"
 		return 0
